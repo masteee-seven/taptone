@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>taptone</title>
+<title>NEWLY MUSIUM — 音声キュー卓</title>
 
 <!-- ホーム画面追加（PWA）対応 -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="taptone">
+<meta name="apple-mobile-web-app-title" content="NEWLY MUSIUM">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#15171a">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -201,7 +201,7 @@
   }
   .micro:hover{ color:#5a2038; border-color:#c2447a; }
   .micro.del:hover{ color:var(--cue-red); border-color:var(--cue-red); }
-  .micro.loopbtn{ display:inline-flex; align-items:center; gap:3px; padding:3px 7px; }
+  .micro.loopbtn{ display:none; align-items:center; gap:3px; padding:3px 7px; }
   .micro.loopbtn svg{ width:10px; height:10px; }
   .micro.loopbtn.active{
     color:var(--cue-amber); border-color:var(--cue-amber);
@@ -384,8 +384,8 @@
 
 <header>
   <div class="brand">
-    <h1><span class="led"></span>taptone</h1>
-    <span class="sub">produced by Kazuo-Yamamoto</span>
+    <h1><span class="led"></span>NEWLY MUSIUM</h1>
+    <span class="sub">produced by Netz Newly Kita-osaka</span>
   </div>
   <div class="console-controls">
     <label class="btn primary" for="fileInput">＋ 音声を読み込む</label>
@@ -430,12 +430,6 @@
   // 実際のタッチ対応有無（maxTouchPoints等）で判定する。
   const IS_TOUCH_DEVICE = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (navigator.msMaxTouchPoints > 0);
   if(IS_TOUCH_DEVICE) document.documentElement.classList.add('touch-device');
-
-  // クロスフェード機能はPC・タブレットのみ対象（スマホでは非対応）。
-  // 画面幅で判定：CSSのスマホ用ブレークポイント（max-width:768px）と対になる769px以上をPC/タブレットとみなす。
-  const crossfadeMQ = window.matchMedia('(min-width: 769px)');
-  let ENABLE_CROSSFADE = crossfadeMQ.matches;
-  crossfadeMQ.addEventListener('change', (e)=>{ ENABLE_CROSSFADE = e.matches; });
 
   const grid = document.getElementById('grid');
   const empty = document.getElementById('empty');
@@ -535,6 +529,7 @@
 
   function hardStop(pad){
     if(pad.fadeFrame){ cancelAnimationFrame(pad.fadeFrame); pad.fadeFrame = null; }
+    if(pad.fadeTimeout){ clearTimeout(pad.fadeTimeout); pad.fadeTimeout = null; }
     pad.audio.pause();
     pad.audio.currentTime = 0;
     pad.audio.volume = parseFloat(masterVol.value);
@@ -556,9 +551,14 @@
     if(!duration){ hardStop(pad); return; }
 
     if(pad.fadeFrame) cancelAnimationFrame(pad.fadeFrame);
+    if(pad.fadeTimeout) clearTimeout(pad.fadeTimeout);
     pad.el.classList.add('fading');
     const startVol = pad.audio.volume;
     const startTime = performance.now();
+
+    // フェイルセーフ：iOS等でrequestAnimationFrameによるボリューム制御が
+    // 正常に反映/進行しない場合でも、指定時間後に確実に完全停止させる
+    pad.fadeTimeout = setTimeout(()=>{ hardStop(pad); }, duration + 120);
 
     function step(now){
       if(pad.audio.paused){ hardStop(pad); return; }
@@ -587,65 +587,15 @@
     pad.el.classList.add('playing');
   }
 
-  // クロスフェード切り替え（PC・タブレット用）
-  // 再生中の他パッドをフェードアウトさせながら、新しいパッドを同時にフェードインする。
-  function crossfadePad(pad){
-    const duration = parseInt(fadeTime.value, 10);
-
-    // 一旦、対象パッド以外のpaused-sp（スペースキーでの一時停止）表示は解除
-    pads.forEach(p=>{ if(p.id !== pad.id) p.el.classList.remove('paused-sp'); });
-
-    // 現在再生中／フェード中の他パッドを対象にする
-    const others = pads.filter(p=> p.id !== pad.id && (!p.audio.paused || p.fadeFrame));
-
-    if(pad.fadeFrame){ cancelAnimationFrame(pad.fadeFrame); pad.fadeFrame = null; }
-    pad.el.classList.remove('fading');
-
-    const target = parseFloat(masterVol.value);
-
-    if(!duration || !others.length){
-      // フェード時間0、または他に再生中パッドがなければ通常再生と同じ
-      others.forEach(hardStop);
-      pad.audio.currentTime = 0;
-      pad.audio.volume = target;
-      pad.audio.play();
-      pad.el.classList.add('playing');
+  function togglePad(pad){
+    if(pad.el.classList.contains('fading')){
+      // フェードアウト中に再タップされた場合、フェードをやり直すのではなく
+      // 即座に完全停止する（連打・モバイルでのタップ重複時に停止しなくなる不具合対策）
+      hardStop(pad);
       return;
     }
-
-    // 他パッドの現在の音量を記録し、フェード演出クラスを付与
-    const startVolumes = others.map(p=>{
-      if(p.fadeFrame){ cancelAnimationFrame(p.fadeFrame); p.fadeFrame = null; }
-      p.el.classList.add('fading');
-      return p.audio.volume;
-    });
-
-    pad.audio.currentTime = 0;
-    pad.audio.volume = 0;
-    pad.audio.play();
-    pad.el.classList.add('playing');
-
-    const startTime = performance.now();
-
-    function step(now){
-      const t = Math.min(1, (now - startTime) / duration);
-      pad.audio.volume = target * t;
-      others.forEach((p, i)=>{ p.audio.volume = startVolumes[i] * (1 - t); });
-      if(t < 1){
-        pad.fadeFrame = requestAnimationFrame(step);
-      } else {
-        pad.audio.volume = target;
-        pad.fadeFrame = null;
-        others.forEach(hardStop);
-      }
-    }
-    pad.fadeFrame = requestAnimationFrame(step);
-  }
-
-  function togglePad(pad){
     if(pad.audio.paused){
-      if(ENABLE_CROSSFADE) crossfadePad(pad);  // PC・タブレット → クロスフェード切替
-      else playPad(pad);                        // スマホ → 従来通り即時切替
+      playPad(pad);       // 新規再生 → 他パッドは即時停止
     } else {
       stopPad(pad);       // 手動停止 → フェードアウト
     }
