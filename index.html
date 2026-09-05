@@ -453,8 +453,10 @@
   let pads = []; // {id, name, url, audio, el, loop, key}
 
   // ---- 順次再生（1番目から順番に自動再生）----
-  let sequentialActive = false;
+  let sequentialActive = false;    // 現在自動再生が進行中か
+  let sequentialPaused = false;    // ボタンで一時停止した状態か（再開待ち）
   let sequentialIndex = 0;
+  let sequentialResumeTime = 0;    // 一時停止した時点の再生位置（秒）
 
   function updateCount(){
     countEl.textContent = pads.length + ' PADS LOADED';
@@ -667,7 +669,7 @@
   }
 
   function togglePad(pad){
-    if(sequentialActive) stopSequential(); // 手動操作されたら順次再生は解除
+    if(sequentialActive || sequentialPaused) stopSequential(); // 手動操作されたら順次再生は解除
     if(!pad.audio.paused && pad.el.classList.contains('fading')){
       // フェードアウト中に再タップされた場合、フェード完了を待たず即座に停止する
       hardStop(pad);
@@ -687,25 +689,46 @@
     seqBtn.classList.toggle('primary', sequentialActive);
   }
 
+  // 手動操作（他パッドの再生・全停止・新規作成・Escape）による完全解除。進行状況も破棄する。
   function stopSequential(){
     sequentialActive = false;
+    sequentialPaused = false;
+    sequentialIndex = 0;
+    sequentialResumeTime = 0;
     updateSeqBtn();
   }
 
-  function playSequentialAt(index){
+  // 順次再生ボタンでの一時停止。現在の再生位置を記憶しておき、フェード等はせず即座に止める。
+  function pauseSequential(){
+    const pad = pads[sequentialIndex];
+    if(pad){
+      if(pad.fadeFrame){ cancelAnimationFrame(pad.fadeFrame); pad.fadeFrame = null; }
+      if(pad.stopTimeout){ clearTimeout(pad.stopTimeout); pad.stopTimeout = null; }
+      sequentialResumeTime = pad.audio.currentTime || 0;
+      pad.audio.pause();
+      pad.audio.volume = parseFloat(masterVol.value);
+      pad.el.classList.remove('playing');
+      pad.el.classList.remove('fading');
+    }
+    sequentialActive = false;
+    sequentialPaused = true;
+    updateSeqBtn();
+  }
+
+  function playSequentialAt(index, resumeAt){
     if(!sequentialActive) return;
     if(index >= pads.length){ stopSequential(); return; } // 最後まで再生したら終了
     sequentialIndex = index;
     const pad = pads[index];
 
-    // 他のパッドは即時停止し、対象パッドを頭から再生
+    // 他のパッドは即時停止し、対象パッドを再生（通常は頭から、再開時は中断位置から）
     pads.forEach(p=>{
       if(p.id !== pad.id && (!p.audio.paused || p.fadeFrame)) hardStop(p);
       p.el.classList.remove('paused-sp');
     });
     if(pad.fadeFrame){ cancelAnimationFrame(pad.fadeFrame); pad.fadeFrame = null; }
     pad.el.classList.remove('fading');
-    pad.audio.currentTime = 0;
+    pad.audio.currentTime = resumeAt || 0;
     pad.audio.volume = parseFloat(masterVol.value);
     pad.audio.play();
     pad.el.classList.add('playing');
@@ -714,8 +737,19 @@
   function startSequential(){
     if(!pads.length) return;
     sequentialActive = true;
+    sequentialPaused = false;
+    sequentialResumeTime = 0;
     updateSeqBtn();
-    playSequentialAt(0);
+    playSequentialAt(0, 0);
+  }
+
+  // 一時停止していた位置から再開
+  function resumeSequential(){
+    if(!pads.length || sequentialIndex >= pads.length){ startSequential(); return; }
+    sequentialActive = true;
+    sequentialPaused = false;
+    updateSeqBtn();
+    playSequentialAt(sequentialIndex, sequentialResumeTime);
   }
 
   // ファイルからパッドを生成して返す（グリッドへの追加・pads配列追加はしない）
@@ -929,10 +963,11 @@
 
   seqBtn.addEventListener('click', ()=>{
     if(sequentialActive){
-      stopSequential();
-      pads.forEach(p=>stopPad(p));
+      pauseSequential();       // 一時停止（位置を記憶）
+    } else if(sequentialPaused){
+      resumeSequential();      // 記憶した位置から再開
     } else {
-      startSequential();
+      startSequential();       // 最初から開始
     }
   });
 
