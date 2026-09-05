@@ -452,11 +452,12 @@
   const KEYS = ['1','2','3','4','5','6','7','8','9','0','q','w','e','r','t','y','u','i','o','p'];
   let pads = []; // {id, name, url, audio, el, loop, key}
 
-  // ---- 順次再生（1番目から順番に自動再生）----
+  // ---- 順次再生（タップしたパッドから順番に自動再生）----
   let sequentialActive = false;    // 現在自動再生が進行中か
   let sequentialPaused = false;    // ボタンで一時停止した状態か（再開待ち）
   let sequentialIndex = 0;
   let sequentialResumeTime = 0;    // 一時停止した時点の再生位置（秒）
+  let lastTappedPadId = null;      // 最後にタップしたパッド（順次再生の開始位置に使う）
 
   function updateCount(){
     countEl.textContent = pads.length + ' PADS LOADED';
@@ -669,17 +670,21 @@
   }
 
   function togglePad(pad){
-    if(sequentialActive || sequentialPaused) stopSequential(); // 手動操作されたら順次再生は解除
+    lastTappedPadId = pad.id; // 「▶ 順次再生」を押したときの開始位置として記憶
+
     if(!pad.audio.paused && pad.el.classList.contains('fading')){
       // フェードアウト中に再タップされた場合、フェード完了を待たず即座に停止する
+      stopSequential();
       hardStop(pad);
       return;
     }
     if(pad.audio.paused){
+      stopSequential(); // 通常タップは単独再生。自動的な順次進行はここで解除
       if(ENABLE_CROSSFADE) crossfadePad(pad);  // PC・タブレット → クロスフェード切替
-      else playPad(pad);                        // スマホ → 従来通り即時切替
+      else playPad(pad);                        // スマホ → 単独再生
     } else {
-      stopPad(pad);       // 手動停止 → フェードアウト
+      stopSequential();    // 手動停止 → 順次再生も解除
+      stopPad(pad);        // フェードアウト
     }
   }
 
@@ -740,7 +745,9 @@
     sequentialPaused = false;
     sequentialResumeTime = 0;
     updateSeqBtn();
-    playSequentialAt(0, 0);
+    // 最後にタップしたパッドがあればそこから、なければ1番目から開始
+    const foundIdx = lastTappedPadId ? pads.findIndex(p=>p.id === lastTappedPadId) : -1;
+    playSequentialAt(foundIdx !== -1 ? foundIdx : 0, 0);
   }
 
   // 一時停止していた位置から再開
