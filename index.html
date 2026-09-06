@@ -464,6 +464,36 @@
     empty.style.display = pads.length ? 'none' : 'block';
   }
 
+  // ---- 音声のアンロック対策 ----
+  // iOS Safari等では、一度も手動タップで再生されたことのない<audio>要素は、
+  // JavaScriptからの自動再生（順次再生でのendedイベント経由の呼び出しなど）が
+  // ブロックされることがある。ユーザーが画面のどこかをタップしたタイミングで、
+  // 再生中でない各パッドを一瞬だけ無音再生→即停止し、以降の自動再生を許可させておく。
+  function unlockPadAudio(pad){
+    if(pad.audioUnlocked) return;
+    if(!pad.audio.paused || pad.fadeFrame || pad.el.classList.contains('fading')) return; // 再生中のものには触らない
+    const prevVol = pad.audio.volume;
+    pad.audio.volume = 0;
+    let result;
+    try{ result = pad.audio.play(); }catch(e){ pad.audio.volume = prevVol; return; }
+    const finish = ()=>{
+      pad.audio.pause();
+      pad.audio.currentTime = 0;
+      pad.audio.volume = prevVol;
+      pad.audioUnlocked = true;
+    };
+    if(result && typeof result.then === 'function'){
+      result.then(finish).catch(()=>{ pad.audio.volume = prevVol; });
+    } else {
+      finish();
+    }
+  }
+  function unlockAllPads(){
+    pads.forEach(unlockPadAudio);
+  }
+  document.addEventListener('touchend', unlockAllPads, { passive:true });
+  document.addEventListener('click', unlockAllPads);
+
   // ---- 状態の永続化（IndexedDB）----
   // パッドの並び・名前・ループ設定に加え、音声データそのものをブラウザ内に保存しておき、
   // 次回起動時（ブラウザ再起動後も含む）に自動で復元する。
@@ -599,6 +629,7 @@
     pad.el.classList.remove('fading');
     pad.audio.currentTime = 0;
     pad.audio.volume = parseFloat(masterVol.value);
+    pad.audioUnlocked = true;
     pad.audio.play();
     pad.el.classList.add('playing');
   }
@@ -735,8 +766,18 @@
     pad.el.classList.remove('fading');
     pad.audio.currentTime = resumeAt || 0;
     pad.audio.volume = parseFloat(masterVol.value);
-    pad.audio.play();
+    pad.audioUnlocked = true; // 実際に再生を試みるので以降はアンロック処理不要
+    const playResult = pad.audio.play();
     pad.el.classList.add('playing');
+    // 万一この端末で再生がブロックされた場合、そこで完全停止せず次のパッドへ進む
+    if(playResult && typeof playResult.catch === 'function'){
+      playResult.catch(()=>{
+        pad.el.classList.remove('playing');
+        if(sequentialActive && sequentialIndex === index){
+          playSequentialAt(index + 1);
+        }
+      });
+    }
   }
 
   function startSequential(){
@@ -794,7 +835,7 @@
       </div>
     `;
 
-    const pad = { id, name: baseName, origFilename: file.name, url, audio, el, loop: initLoop, key, placeholder: false, fileBlob: file };
+    const pad = { id, name: baseName, origFilename: file.name, url, audio, el, loop: initLoop, key, placeholder: false, fileBlob: file, audioUnlocked: false };
 
     const durEl = el.querySelector('.dur');
 
