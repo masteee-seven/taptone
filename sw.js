@@ -1,6 +1,6 @@
 // taptone Service Worker — オフライン対応
 // アプリ本体を更新したら CACHE_VERSION を上げると、古いキャッシュが破棄されます。
-const CACHE_VERSION = 'taptone-v1';
+const CACHE_VERSION = 'taptone-v2';
 const CORE_ASSETS = [
   './',
   './index.html',
