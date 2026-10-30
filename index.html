@@ -1086,6 +1086,14 @@
   });
 
   // ---- 起動時に保存済みの状態を自動復元 ----
+  // ---- オフライン対応：Service Worker登録 ----
+  // HTTPS（またはlocalhost）で配信されている場合のみ有効。file://では動作しない。
+  if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('sw.js').catch(()=>{});
+    });
+  }
+
   (async function restoreState(){
     const data = await loadState();
     if(data && data.length){
