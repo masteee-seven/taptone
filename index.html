@@ -378,6 +378,13 @@
   html.touch-device .pad .name[contenteditable]{ outline:none; cursor:default; }
   /* タッチ端末ではドラッグ並び替え非対応のため、紛らわしいハンドルを隠す */
   html.touch-device .pad .drag-handle{ display:none; }
+  /* 長押しドラッグ並び替え中の見た目 */
+  html.touch-device .pad{ -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
+  .pad.touch-dragging{
+    position:relative; z-index:50; opacity:.9;
+    box-shadow:0 10px 28px rgba(0,0,0,.55);
+    transition:none; animation:none;
+  }
 </style>
 </head>
 <body>
@@ -906,6 +913,7 @@
     });
 
     enableDrag(pad);
+    if(IS_TOUCH_DEVICE) enableTouchDrag(pad);
     return pad;
   }
 
@@ -946,16 +954,116 @@
       e.preventDefault();
       el.classList.remove('drag-over');
       if(!dragSrcId || dragSrcId === pad.id) return;
-      const srcIdx = pads.findIndex(p=>p.id === dragSrcId);
-      const dstIdx = pads.findIndex(p=>p.id === pad.id);
-      if(srcIdx < 0 || dstIdx < 0) return;
-      const [moved] = pads.splice(srcIdx, 1);
-      pads.splice(dstIdx, 0, moved);
-      if(srcIdx < dstIdx) pad.el.after(moved.el);
-      else pad.el.before(moved.el);
-      reassignKeys();
-      saveState();
+      reorderPads(dragSrcId, pad.id);
     });
+  }
+
+  // srcId のパッドを dstId のパッドの位置へ移動（PCドラッグ・タッチ長押しドラッグ共通）
+  function reorderPads(srcId, dstId){
+    const srcIdx = pads.findIndex(p=>p.id === srcId);
+    const dstIdx = pads.findIndex(p=>p.id === dstId);
+    if(srcIdx < 0 || dstIdx < 0 || srcIdx === dstIdx) return;
+    // 順次再生中／一時停止中は、並び替え後も同じパッドを指すように位置を補正
+    const seqPadId = pads[sequentialIndex] ? pads[sequentialIndex].id : null;
+    const [moved] = pads.splice(srcIdx, 1);
+    pads.splice(dstIdx, 0, moved);
+    const dstPad = pads[srcIdx < dstIdx ? dstIdx - 1 : dstIdx + 1];
+    if(srcIdx < dstIdx) dstPad.el.after(moved.el);
+    else dstPad.el.before(moved.el);
+    if(seqPadId){
+      const ni = pads.findIndex(p=>p.id === seqPadId);
+      if(ni >= 0) sequentialIndex = ni;
+    }
+    reassignKeys();
+    saveState();
+  }
+
+  // ---- タッチ端末（スマホ・タブレット）：長押ししてからドラッグで並び替え ----
+  function enableTouchDrag(pad){
+    const el = pad.el;
+    const HOLD_MS = 450;     // 長押しと判定する時間
+    const MOVE_TOL = 10;     // 長押し判定中に許容する指の移動量(px)
+    let timer = null, active = false, startX = 0, startY = 0, startScroll = 0, scrollRaf = null, lastX = 0, lastY = 0, overEl = null;
+
+    function clearOver(){
+      document.querySelectorAll('.pad.drag-over').forEach(p=>p.classList.remove('drag-over'));
+      overEl = null;
+    }
+    function updateVisual(){
+      el.style.transform = `translate(${lastX - startX}px, ${lastY - startY + (window.scrollY - startScroll)}px) scale(1.05)`;
+    }
+    function autoScroll(){
+      if(!active) return;
+      const edge = 90;
+      if(lastY < edge) window.scrollBy(0, -12);
+      else if(lastY > window.innerHeight - edge) window.scrollBy(0, 12);
+      updateVisual();
+      scrollRaf = requestAnimationFrame(autoScroll);
+    }
+    function endDrag(){
+      clearTimeout(timer); timer = null;
+      if(scrollRaf){ cancelAnimationFrame(scrollRaf); scrollRaf = null; }
+      if(active){
+        active = false;
+        el.classList.remove('touch-dragging');
+        el.style.transform = '';
+        el.style.pointerEvents = '';
+        clearOver();
+      }
+    }
+
+    el.addEventListener('touchstart', (e)=>{
+      if(locked || e.touches.length !== 1) return;
+      if(e.target.closest('.padbtns')) return;
+      const t = e.touches[0];
+      startX = lastX = t.clientX; startY = lastY = t.clientY; startScroll = window.scrollY;
+      clearTimeout(timer);
+      timer = setTimeout(()=>{
+        active = true;
+        dragSrcId = pad.id;
+        el.classList.add('touch-dragging');
+        el.style.pointerEvents = 'none';   // 下のパッドを elementFromPoint で拾えるように
+        if(navigator.vibrate) navigator.vibrate(15);
+        scrollRaf = requestAnimationFrame(autoScroll);
+      }, HOLD_MS);
+    }, { passive:true });
+
+    el.addEventListener('touchmove', (e)=>{
+      const t = e.touches[0];
+      lastX = t.clientX; lastY = t.clientY;
+      if(!active){
+        // 長押し成立前に指が動いた＝通常のスクロール操作
+        if(Math.abs(t.clientX - startX) > MOVE_TOL || Math.abs(t.clientY - startY) > MOVE_TOL){
+          clearTimeout(timer); timer = null;
+        }
+        return;
+      }
+      e.preventDefault(); // ドラッグ中は画面スクロールさせない
+      updateVisual();
+      const under = document.elementFromPoint(t.clientX, t.clientY);
+      const target = under && under.closest ? under.closest('.pad') : null;
+      if(target !== overEl){
+        clearOver();
+        if(target && target !== el){ target.classList.add('drag-over'); overEl = target; }
+      }
+    }, { passive:false });
+
+    el.addEventListener('touchend', (e)=>{
+      clearTimeout(timer); timer = null;
+      if(!active) return;
+      e.preventDefault(); // この後の click（再生トグル）を発生させない
+      const dstEl = overEl;
+      endDrag();
+      dragSrcId = null;
+      if(dstEl){
+        const dstPad = pads.find(p=>p.el === dstEl);
+        if(dstPad) reorderPads(pad.id, dstPad.id);
+      }
+    }, { passive:false });
+
+    el.addEventListener('touchcancel', ()=>{ endDrag(); dragSrcId = null; });
+    // 長押し時のコンテキストメニュー（iOSの拡大・コピー等）を抑止
+    el.addEventListener('contextmenu', (e)=>{ if(IS_TOUCH_DEVICE) e.preventDefault(); });
   }
 
   function reassignKeys(){
